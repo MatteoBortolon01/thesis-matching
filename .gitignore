@@ -1,0 +1,52 @@
+# Bytecode
+__pycache__/
+*.pyc
+*.pyo
+
+# Virtual environments
+venv/
+.venv/
+ENV/
+
+# Editor/IDE
+.vscode/
+.idea/
+
+# Test/coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Build/package
+build/
+dist/
+*.egg-info/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Environment/secrets
+.env
+.env.*
+
+# Model/data cache
+cache/
+data/cache/
+data/*.npy
+
+# Sample data (CV, JD, ESCO dataset)
+data/sample_cvs/
+data/sample_jobs/
+data/esco/
+
+# Misc
+*.log
+*.swp
+*~
+CONTEXT.md
+STACK_DEFINITIVO.md

@@ -1,0 +1,27 @@
+# ===========================================
+# Job Matching Multi-Agent System
+# Stack ESSENZIALE - Prototipo Tesi
+# ===========================================
+
+# LLM Locale
+ollama>=0.1.0
+
+
+# ESCO mapping (similarity search)
+sentence-transformers>=2.2.0
+numpy>=1.24.0
+
+# Data Models
+pydantic>=2.0.0
+
+# Data Processing
+pandas>=2.0.0
+
+# PDF Parsing (CV)
+pypdf2>=3.0.0
+
+# Frontend Demo
+streamlit>=1.29.0
+
+# Utilities
+python-dotenv>=1.0.0
