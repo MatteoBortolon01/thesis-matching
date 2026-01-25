@@ -13,6 +13,7 @@ from typing import List, Optional
 
 from src.services.llm_service import LLMService
 from src.services.esco_mapper import ESCOMapper
+from src.services.logging_utils import log_section, print_with_prefix
 from src.models.skill import Skill
 from src.models.job import JobRequirements
 from src.models.candidate import Language
@@ -29,7 +30,7 @@ class JobAgent:
         self,
         llm_service: Optional[LLMService] = None,
         esco_mapper: Optional[ESCOMapper] = None,
-        min_mapping_confidence: float = 0.6,
+        min_mapping_confidence: float = 0.8,
         verbose: bool = False
     ):
         self.min_mapping_confidence = min_mapping_confidence
@@ -62,14 +63,12 @@ class JobAgent:
         3. Normalizzazione ESCO
         4. Costruzione JobRequirements
         """
-        self._log("="*60)
-        self._log("JOB AGENT: Analyzing Job Description")
-        self._log("="*60)
+        log_section(self._log, "JOB AGENT: Analyzing Job Description", width=60, char="=")
         
         # ═══════════════════════════════════════════════════════════════
         # STEP 1: Estrazione con LLM
         # ═══════════════════════════════════════════════════════════════
-        self._log("\nStep 1: Extracting requirements with LLM...")
+        log_section(self._log, "Step 1: Extracting requirements with LLM...", width=60, char="-")
         raw_requirements = self.llm_service.extract_job_requirements(job_description)
         
         job_title = raw_requirements.get("job_title", "")
@@ -92,7 +91,7 @@ class JobAgent:
         # ═══════════════════════════════════════════════════════════════
         # STEP 2: Pulizia
         # ═══════════════════════════════════════════════════════════════
-        self._log("\nStep 2: Cleaning skills...")
+        log_section(self._log, "Step 2: Cleaning skills...", width=60, char="-")
         cleaned_required = self._clean_skills(llm_required)
         cleaned_preferred = self._clean_skills(llm_preferred)
         self._log(f"   After cleaning: Required {len(cleaned_required)}, Preferred {len(cleaned_preferred)}")
@@ -100,7 +99,7 @@ class JobAgent:
         # ═══════════════════════════════════════════════════════════════
         # STEP 3: Normalizzazione ESCO
         # ═══════════════════════════════════════════════════════════════
-        self._log(f"\nStep 3: ESCO Normalization...")
+        log_section(self._log, "Step 3: ESCO Normalization...", width=60, char="-")
         normalized_required = self._normalize_skills(cleaned_required, "required")
         normalized_preferred = self._normalize_skills(cleaned_preferred, "preferred")
         
@@ -133,7 +132,7 @@ class JobAgent:
         Chiamato dall'Orchestrator durante la negoziazione.
         Può spostare alcune skill da required a preferred.
         """
-        self._log("\nJOB AGENT: Refining requirements...")
+        self._log("JOB AGENT: Refining requirements...")
         self._log(f"   Current gaps: {gaps}")
         
         if len(gaps) <= 2:
@@ -141,25 +140,66 @@ class JobAgent:
             return job_requirements
         
         # Chiedi all'LLM quali required potrebbero essere rilassati
-        prompt = f"""Job requires these skills that candidate lacks: {', '.join(gaps)}
-Candidate has: {', '.join(candidate_skills[:15])}
+        prompt = f"""You are JobAgent, an autonomous agent representing the employer's perspective.
 
-Which 1-2 missing skills could reasonably be learned on the job or have partial equivalents in candidate's skills?
-Consider: similar technologies, transferable skills, learning curve.
+Your objective is to preserve job quality and reduce hiring risk, 
+while enabling a feasible match if reasonable compromises exist.
 
-Return JSON: {{"relaxable": ["skill1", "skill2"]}}
-If none can be relaxed, return: {{"relaxable": []}}
+CONTEXT:
+- Missing required skills (gaps): {gaps}
+- Candidate current skills: {candidate_skills}
+- Current number of gaps: {len(gaps)}
+
+RULES:
+- You may relax AT MOST 1–2 required skills.
+- Only relax skills that:
+    - are NOT core to the role
+    - can realistically be learned on the job
+    - have partial or transferable equivalents in candidate skills
+- If relaxing skills would significantly increase mismatch risk, you MUST refuse.
+
+DECISION TASK:
+Evaluate whether relaxing any required skills is acceptable.
+
+If YES:
+- Decide WHICH skills to relax
+- Explain WHY each skill is acceptable to relax
+
+If NO:
+- Explicitly refuse and explain WHY no relaxation is acceptable
+
+OUTPUT FORMAT (JSON ONLY):
+
+{{
+    "decision": "RELAX" | "REFUSE",
+    "relaxable_skills": ["skill1", "skill2"],
+    "reasoning": "Concise explanation of the decision from the employer perspective"
+}}
+
+IMPORTANT:
+- Do NOT suggest skills outside the provided gaps
+- Do NOT exceed 2 skills
+- Be conservative: refusing is acceptable if justified
 
 JSON:"""
 
         result = self.llm_service.generate_json(prompt, temperature=0.2)
-        relaxable = result.get("relaxable", []) if result else []
-        
-        if not relaxable:
-            self._log("   -> LLM suggests no skills can be relaxed")
+        decision = result.get("decision") if result else None
+        reasoning = result.get("reasoning", "N/A") if result else "N/A"
+
+        if decision != "RELAX":
+            self._log("   -> JobAgent refused to relax requirements")
+            self._log(f"   Reasoning: {reasoning}")
             return job_requirements
-        
-        self._log(f"   -> LLM suggests relaxing: {relaxable}")
+
+        relaxable = result.get("relaxable_skills", [])[:2]
+
+        if not relaxable:
+            self._log("   -> No relaxable skills identified")
+            return job_requirements
+
+        self._log(f"   -> Relaxing skills: {relaxable}")
+        self._log(f"   Reasoning: {reasoning}")
         
         # Sposta skill rilassabili da required a preferred
         new_required = []
@@ -283,5 +323,4 @@ JSON:"""
     
     def _log(self, message: str) -> None:
         """Conditional logging."""
-        if self.verbose:
-            print(f"[JobAgent] {message}")
+        print_with_prefix("[JobAgent]", message, enabled=self.verbose)

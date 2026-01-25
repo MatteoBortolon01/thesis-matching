@@ -1,13 +1,16 @@
 """
 LLM Service
-Wrapper per Ollama - gestisce le chiamate al modello LLM locale.
+Wrapper per LLM locali (Ollama o LM Studio) - gestisce le chiamate al modello.
 """
 
-import ollama
 import json
+import os
 import re
 from typing import Optional, List, Dict, Any
 
+import ollama
+
+from src.services.logging_utils import log_section, print_with_prefix
 
 class OllamaNotAvailableError(Exception):
     """Eccezione per quando Ollama non è disponibile."""
@@ -16,7 +19,7 @@ class OllamaNotAvailableError(Exception):
 
 class LLMService:
     """
-    Servizio per interagire con Ollama (LLM locale).
+    Servizio per interagire con LLM locali (Ollama o LM Studio).
     """
     
     def __init__(
@@ -24,25 +27,43 @@ class LLMService:
         model: str = "llama3.2",
         temperature: float = 0.3,
         timeout: int = 120,
-        num_gpu: int = -1  # -1 = auto (usa tutte le GPU disponibili)
+        num_gpu: int = -1,  # -1 = auto (usa tutte le GPU disponibili)
+        provider: str = "lmstudio",  # "ollama" o "lmstudio"
+        lmstudio_base_url: Optional[str] = None,
+        lmstudio_api_key: Optional[str] = None,
+        lmstudio_model: Optional[str] = "meta-llama-3.1-8b-instruct"
     ):
         """
         Inizializza il servizio LLM.
         
         Args:
-            model: Nome del modello Ollama (default: llama3.2)
+            model: Nome del modello (Ollama o LM Studio)
             temperature: Temperatura per la generazione (0-1, più basso = più deterministico)
             timeout: Timeout in secondi per le chiamate
             num_gpu: Numero di layer GPU (-1 = auto, 0 = solo CPU)
+            provider: "ollama" o "lmstudio"
+            lmstudio_base_url: Base URL per LM Studio (default: env LMSTUDIO_BASE_URL o http://localhost:1234/v1)
+            lmstudio_api_key: API key per LM Studio (default: env LMSTUDIO_API_KEY o "lmstudio")
+            lmstudio_model: Nome modello LM Studio (fallback su "model")
         """
-        self.model = model
+        self.provider = (provider or "ollama").lower()
+        if self.provider not in {"ollama", "lmstudio"}:
+            raise ValueError("provider deve essere 'ollama' o 'lmstudio'")
+
+        self.model = lmstudio_model or model
         self.temperature = temperature
         self.timeout = timeout
         self.num_gpu = num_gpu
         self.is_available = False
+        self._lmstudio_client = None
+        self.lmstudio_base_url = lmstudio_base_url or os.getenv("LMSTUDIO_BASE_URL", "http://bears.disi.unitn.it:1234/v1")
+        self.lmstudio_api_key = lmstudio_api_key or os.getenv("LMSTUDIO_API_KEY", "lmstudio")
         
-        # Verifica che Ollama sia disponibile
-        self._check_ollama()
+        # Verifica provider
+        if self.provider == "ollama":
+            self._check_ollama()
+        else:
+            self._check_lmstudio()
     
     def _check_ollama(self) -> None:
         """Verifica che Ollama sia in esecuzione e il modello sia disponibile."""
@@ -71,6 +92,44 @@ class LLMService:
             self.is_available = False
             self._log(f"Errore connessione Ollama: {e}")
             self._log("Assicurati che Ollama sia in esecuzione (ollama serve)")
+
+    def _get_lmstudio_client(self):
+        """Crea (lazy) client OpenAI compatibile con LM Studio."""
+        if self._lmstudio_client is None:
+            try:
+                from openai import OpenAI
+            except Exception as e:
+                raise OllamaNotAvailableError(
+                    "Package 'openai' mancante. Installa con: pip install openai"
+                ) from e
+
+            self._lmstudio_client = OpenAI(
+                base_url=self.lmstudio_base_url,
+                api_key=self.lmstudio_api_key
+            )
+        return self._lmstudio_client
+
+    def _check_lmstudio(self) -> None:
+        """Verifica che LM Studio sia raggiungibile e il modello disponibile."""
+        try:
+            client = self._get_lmstudio_client()
+            models = client.models.list()
+            model_names = [m.id for m in models.data] if getattr(models, "data", None) else []
+
+            model_found = any(
+                self.model in name or name.startswith(self.model)
+                for name in model_names
+            )
+
+            if not model_found:
+                self._log(f"Modello '{self.model}' non trovato su LM Studio. Modelli disponibili: {model_names}")
+                self.is_available = False
+            else:
+                self.is_available = True
+                self._log(f"LLM Service pronto (provider: lmstudio, modello: {self.model})")
+        except Exception as e:
+            self.is_available = False
+            self._log(f"LM Studio non raggiungibile: {e}")
     
     def generate(
         self,
@@ -90,9 +149,14 @@ class LLMService:
             Testo generato dal modello
         """
         if not self.is_available:
+            if self.provider == "ollama":
+                raise OllamaNotAvailableError(
+                    "Ollama non disponibile. Avvialo con 'ollama serve' e assicurati "
+                    f"che il modello '{self.model}' sia installato (ollama pull {self.model})"
+                )
             raise OllamaNotAvailableError(
-                "Ollama non disponibile. Avvialo con 'ollama serve' e assicurati "
-                f"che il modello '{self.model}' sia installato (ollama pull {self.model})"
+                "LM Studio non disponibile. Avvialo e assicurati che l'endpoint sia raggiungibile "
+                f"(base_url={self.lmstudio_base_url}) e che il modello '{self.model}' sia caricato"
             )
         
         messages = []
@@ -103,17 +167,28 @@ class LLMService:
         messages.append({"role": "user", "content": prompt})
         
         try:
-            response = ollama.chat(
+            if self.provider == "ollama":
+                response = ollama.chat(
+                    model=self.model,
+                    messages=messages,
+                    options={
+                        "temperature": temperature or self.temperature,
+                        "num_gpu": self.num_gpu  # -1 = usa tutte le GPU
+                    }
+                )
+                return response.message.content
+
+            client = self._get_lmstudio_client()
+            response = client.chat.completions.create(
                 model=self.model,
                 messages=messages,
-                options={
-                    "temperature": temperature or self.temperature,
-                    "num_gpu": self.num_gpu  # -1 = usa tutte le GPU
-                }
+                temperature=temperature or self.temperature
             )
-            return response.message.content
+            return response.choices[0].message.content
         except Exception as e:
-            raise OllamaNotAvailableError(f"Errore chiamata Ollama: {e}")
+            if self.provider == "ollama":
+                raise OllamaNotAvailableError(f"Errore chiamata Ollama: {e}")
+            raise OllamaNotAvailableError(f"Errore chiamata LM Studio: {e}")
     
     def generate_json(
         self,
@@ -200,8 +275,9 @@ class LLMService:
             Dizionario con required_skills, preferred_skills, experience_years
         """
         system_prompt = """You are an expert HR analyst specialized in parsing job descriptions.
-Extract information precisely and in a structured format.
-ALWAYS respond with valid JSON only."""
+Extract information precisely, conservatively, and in a structured format.
+Only use information explicitly stated in the text; do not infer or embellish.
+ALWAYS respond with valid JSON only and follow the requested schema exactly."""
 
         prompt = f"""Analyze this job description and extract the requirements.
 
@@ -224,17 +300,27 @@ Respond with this JSON format:
 RULES:
 - "required_skills": MANDATORY skills (keywords: "required", "must have", "necessary", "essential")
 - "preferred_skills": OPTIONAL skills (keywords: "preferred", "nice to have", "plus", "bonus")
+- Include BOTH technical skills and soft skills if explicitly mentioned
+- Soft skills examples: communication, teamwork, leadership, problem solving, time management
+- Do NOT include years of experience or seniority phrases as skills (e.g., "3+ years of backend development experience")
+- If a requirement mixes years and a skill, extract ONLY the skill (e.g., "3+ years of Python" -> "Python")
 - If not specified, consider skills as required
 - "experience_years": integer, 0 if not specified
-- Extract SPECIFIC technical skills (languages, frameworks, tools), not generic descriptions
+- Extract SPECIFIC skills, avoid vague phrases (e.g., "strong background")
 - "languages_required": MANDATORY languages with level
 - "languages_preferred": optional/preferred languages
 - "remote_policy": "full_remote", "hybrid", "on_site" or null if not specified
+- If a field is not mentioned, use an empty value ("" or [] or 0 or null)
 
 JSON:"""
 
         result = self.generate_json(prompt, system_prompt, temperature=0.1)
-        
+
+        # Log the full JSON response in a dedicated section
+        log_section(self._log, "LLM RAW JOB REQUIREMENTS JSON", width=60, char="=")
+        self._log(json.dumps(result, ensure_ascii=False, indent=2) if result else "<No JSON parsed>")
+        self._log("=" * 60)
+
         # Valori di default se parsing fallisce
         if result is None:
             return {
@@ -248,7 +334,7 @@ JSON:"""
                 "remote_policy": None,
                 "notes": "Parsing fallito"
             }
-        
+
         return result
     
     def extract_cv_info(self, cv_text: str) -> Dict[str, Any]:
@@ -261,59 +347,111 @@ JSON:"""
         Returns:
             Dizionario con name, experience_years, education, technical_skills, soft_skills
         """
-        system_prompt = """You are an expert recruiter who analyzes CVs/resumes.
-Extract information precisely and in a structured format.
-ALWAYS respond with valid JSON only, no comments or other text."""
+        system_prompt = """You are a CV Parsing Agent used in an automated candidate screening system.
 
-        prompt = f"""Analyze this CV/resume and extract all relevant information.
+Your task is to extract factual information explicitly stated in the CV,
+without making assumptions or inferences.
+
+You must be precise, conservative, and consistent.
+
+Constraints:
+- Extract ONLY information explicitly mentioned in the CV
+- Do NOT infer missing details
+- Do NOT reinterpret or normalize job titles, degrees, or skills
+- Do NOT add explanations, comments, or extra text
+- Always output valid JSON strictly following the requested schema
+
+If a field cannot be determined from the CV, use an appropriate empty value
+(e.g., empty string, empty list, or 0)."""
+
+        prompt = f"""TASK:
+Analyze the following CV/resume and extract structured information.
 
 CV:
 {cv_text}
 
-Respond with this JSON format:
+OUTPUT FORMAT (JSON ONLY):
 {{
-    "name": "candidate full name",
-    "experience_years": total_years_of_experience,
-    "education": "most recent/relevant degree",
-    "job_title": "current or most recent role",
+    "name": "candidate full name or empty string",
+    "experience_years": number,
+    "education": "most recent or relevant degree, or empty string",
+    "job_title": "current or most recent role, or empty string",
     "technical_skills": [
-        {{"name": "skill name", "category": "category"}},
-        ...
+        {{ "name": "skill name", "category": "category" }}
     ],
     "soft_skills": [
-        {{"name": "soft skill name", "category": "soft_skill"}},
-        ...
+        {{ "name": "soft skill name", "category": "soft_skill" }}
     ],
-    "certifications": ["cert1", "cert2", ...],
+    "certifications": ["certification name"],
     "languages": [
-        {{"name": "Italian", "level": "Native"}},
-        {{"name": "English", "level": "B2"}}
+        {{ "name": "language", "level": "level" }}
     ]
 }}
 
-RULES for skills:
-- "technical_skills": programming languages, frameworks, databases, tools, technologies, cloud platforms
-- Search in ALL sections: Skills, Tools, Languages, Technologies, Frameworks, Cloud, DevOps, etc.
-- Cloud platforms (AWS, GCP, Azure) go in "cloud" category
-- "soft_skills": interpersonal, organizational, problem solving, teamwork, communication skills
-- "category" for technical: "programming_language", "framework", "database", "cloud", "devops", "tool", "other"
-- Extract SPECIFIC skills, not generic descriptions
-- If candidate mentions "React, Node.js" extract two separate skills
-- If there's a "Tools" section, extract EVERY tool listed (GCP, Docker, Git, etc.)
-- "experience_years": estimate total years of work experience (0 if student with no experience)
+SKILLS EXTRACTION RULES:
+- Extract ONLY skills explicitly mentioned in the CV
+- Include both technical and non-technical professional skills
+- Extract individual skills (e.g. "Excel, PowerPoint" → two entries)
+- Search ALL sections (Skills, Tools, Competencies, Experience, etc.)
+- Avoid generic or vague descriptions (e.g. "professional experience")
 
-RULES for languages:
-- "languages": list of objects with "name" and "level"
-- "level": use the level indicated in the CV (e.g., "Native", "Fluent", "B1", "B2", "C1", "C2", "Basic")
-- If level not specified, use "Not specified"
-- IMPORTANT: extract ONLY languages EXPLICITLY mentioned in the CV
-- DO NOT invent or assume languages (e.g., don't assume Italian just because CV is in Italian)
-- If no languages mentioned, return empty list []
+TECHNICAL SKILLS CATEGORIES:
+Use the most appropriate category from the following:
+- programming_language
+- framework
+- database
+- cloud
+- devops
+- tool
+- software
+- methodology
+- other
+
+Examples:
+- Excel → tool
+- SAP → software
+- AutoCAD → software
+- Python → programming_language
+- Agile → methodology
+
+SOFT SKILLS RULES:
+- Include interpersonal, organizational, and cognitive skills
+- Examples: communication, teamwork, leadership, time management, problem solving
+- Extract ONLY if explicitly mentioned
+
+LANGUAGES RULES:
+- Extract ONLY languages explicitly mentioned
+- Use the proficiency level stated in the CV
+- If the level is missing, use "Not specified"
+- Do NOT infer native language
+- If no languages are mentioned, return []
+
+EXPERIENCE RULES:
+- Estimate total professional experience in years
+- Include non-technical roles
+- If the candidate has no professional experience, return 0
+
+CERTIFICATIONS RULE:
+- If a certification is explicitly mentioned,
+  extract it ONLY as a certification
+- Do NOT extract its internal modules as separate skills
+- Do NOT infer skills from certifications
+
+IMPORTANT:
+- Output JSON only
+- No comments
+- No markdown
+- No additional text
 
 JSON:"""
 
         result = self.generate_json(prompt, system_prompt, temperature=0.1)
-        
+
+        # Log the full JSON response in a dedicated section
+        log_section(self._log, "LLM RAW CANDIDATE PROFILE JSON", width=60, char="=")
+        self._log(json.dumps(result, ensure_ascii=False, indent=2) if result else "<No JSON parsed>")
+        self._log("=" * 60)
+
         # Valori di default se parsing fallisce
         if result is None:
             return {
@@ -326,7 +464,7 @@ JSON:"""
                 "certifications": [],
                 "languages": []
             }
-        
+
         return result
     
     def generate_match_explanation(
@@ -368,7 +506,11 @@ Write a brief explanation (2-3 sentences in Italian) covering:
 2. Main strengths
 3. Key gaps (if any)
 
-Be concise and professional."""
+Rules:
+- If candidate_experience >= required_experience, treat it as a strength, not a gap
+- If candidate_experience < required_experience, mention it as a potential gap
+- Do not present higher experience as a negative
+- Keep tone concise and professional."""
 
         return self.generate(prompt, temperature=0.3)
     
@@ -377,7 +519,8 @@ Be concise and professional."""
         gap_skills: List[str],
         candidate_skills: List[str],
         max_retries: int = 2,
-        verbose: bool = False
+        verbose: bool = False,
+        system_prompt: Optional[str] = None
     ) -> Dict[str, str]:
         """
         Ragiona sulle equivalenze tra skill richieste e skill candidato.
@@ -389,147 +532,111 @@ Be concise and professional."""
         gaps_str = ', '.join(gap_skills[:10])
         cand_str = ', '.join(candidate_skills[:30])
         
+        system_prompt = """You are a Skill Equivalence Evaluator.
+
+Your task is to determine whether two technical skills can be considered
+functionally equivalent in a professional recruiting context.
+
+You must be extremely conservative:
+- False positives are unacceptable
+- If an equivalence is not clearly justified, you must reject it
+- When in doubt, choose NOT equivalent"""
+
         # Prompt in inglese (LLM performa meglio)
-        prompt = f"""Required skills (gaps): [{gaps_str}]
-Candidate has: [{cand_str}]
+        prompt = f"""TASK:
+Evaluate whether any REQUIRED skills can be considered technically equivalent
+to skills already possessed by the candidate.
 
-VALID EQUIVALENCES (same technology category ONLY):
-- Python web frameworks (backend): FastAPI = Flask = Django
-- SQL databases: PostgreSQL = MySQL = SQL Server = SQL
-- Cloud providers: AWS = GCP = Azure
-- Container orchestration: Kubernetes = Docker Swarm
-- Message queues: RabbitMQ = Redis = Kafka
+CONTEXT:
+- Required skills (gaps): [{gaps_str}]
+- Candidate skills: [{cand_str}]
 
-INVALID - NEVER match these (different categories):
-- Backend ≠ Frontend: Django ≠ React, Flask ≠ Vue, FastAPI ≠ Angular
-- Serverless ≠ CI/CD: AWS Lambda ≠ Jenkins, Lambda ≠ GitHub Actions
-- Database ≠ Cache: PostgreSQL ≠ Redis
-- Container ≠ Orchestration: Docker ≠ Kubernetes
+EQUIVALENCE CRITERIA (ALL must be satisfied):
+Two skills may be considered equivalent ONLY IF:
+1. They belong to the SAME technical domain
+2. They serve the SAME primary functional role
+3. Knowledge is directly transferable with minimal retraining
+4. They are commonly interchangeable in real-world job requirements
 
-RULES:
-1. Match ONLY if technologies serve the SAME purpose
-2. Django/Flask/FastAPI are BACKEND - never match with React/Vue/Angular
-3. If unsure, do NOT include the match
-4. Return ONLY valid technical equivalences
+NON-EQUIVALENCE RULES:
+The following are NEVER equivalent:
+- Backend frameworks ↔ Frontend frameworks
+- Programming languages ↔ Frameworks
+- Databases ↔ Caches
+- Infrastructure tools ↔ Application frameworks
+- CI/CD tools ↔ Runtime or serverless platforms
 
-Return flat JSON. Example: {{"FastAPI":"Flask","PostgreSQL":"SQL","AWS":"GCP"}}
-If no valid equivalence, return: {{}}
+DECISION PROCESS (internal):
+For each potential match:
+- Identify domain
+- Identify functional role
+- Assess transferability
+- Decide equivalence or rejection
+
+OUTPUT FORMAT (JSON ONLY):
+Return a flat JSON mapping:
+"required_skill" → "equivalent_candidate_skill"
+
+Example:
+{{"FastAPI": "Flask"}}
+
+If no valid equivalences exist, return:
+{{}}
+
+IMPORTANT:
+- Do NOT force equivalences
+- Do NOT generalize by buzzwords
+- Do NOT infer seniority or experience
+- Reject partial or conceptual similarity
 
 JSON:"""
 
         candidate_lower = {s.lower(): s for s in candidate_skills}
 
-        def _flatten_equivalences(obj: Any) -> Dict[str, str]:
-            """Flatten possible shapes returned by the LLM into gap->match string.
-
-            Handles:
-            - {"Gap": {"FastAPI": "Flask"}}
-            - {"FastAPI": "Flask"}
-            - {"Python web frameworks": {"FastAPI": "Flask", "Django": "Flask"}}
-            - strings like "FastAPI = Flask" or lists of such strings
-            - nested single-key wrappers
+        def extract_equivalences(result: dict, candidate_lower: dict) -> Dict[str, str]:
             """
-            out: Dict[str, str] = {}
+            Extract validated skill equivalences from a strict LLM JSON response.
+            Expected format:
+            {
+              "matches": {
+                "GapSkill": "CandidateSkill"
+              }
+            }
+            """
+            if not isinstance(result, dict):
+                return {}
 
-            if isinstance(obj, dict):
-                for k, v in obj.items():
-                    # If value is a simple string mapping: {"FastAPI": "Flask"}
-                    if isinstance(v, str):
-                        out[k] = v
-                        continue
+            matches = result.get("matches")
+            if not isinstance(matches, dict):
+                return {}
 
-                    # If value is a dict, inner keys are likely specific gaps
-                    if isinstance(v, dict):
-                        for inner_k, inner_v in v.items():
-                            if isinstance(inner_v, str):
-                                out[inner_k] = inner_v
-                            elif isinstance(inner_v, list):
-                                # take first string-like element
-                                for el in inner_v:
-                                    if isinstance(el, str):
-                                        out[inner_k] = el
-                                        break
-                        continue
+            valid: Dict[str, str] = {}
 
-                    # If value is a list of strings like ["FastAPI = Flask"]
-                    if isinstance(v, list):
-                        for el in v:
-                            if isinstance(el, str) and "=" in el:
-                                left, right = map(str.strip, el.split("=", 1))
-                                out[left] = right
-                        continue
-
-            # If obj itself is a string like "FastAPI = Flask"
-            if isinstance(obj, str):
-                if "=" in obj:
-                    left, right = map(str.strip, obj.split("=", 1))
-                    out[left] = right
-
-            return out
-
-        for attempt in range(max_retries + 1):
-            try:
-                temp = 0.1 + (attempt * 0.1)
-                response = self.generate(prompt, temperature=temp)
-
-                if verbose:
-                    self._log(f"   [LLM attempt {attempt+1}] Response: {response[:400]}...")
-
-                result = self._extract_json(response)
-
-                if result is None:
-                    if verbose:
-                        self._log(f"   [LLM attempt {attempt+1}] Failed to extract JSON")
+            for gap, match in matches.items():
+                if not isinstance(gap, str) or not isinstance(match, str):
                     continue
 
-                # Try several known wrapper keys
-                candidate_map: Dict[str, str] = {}
-                if isinstance(result, dict):
-                    # common wrappers
-                    for wrapper in ("Gap", "gaps", "equivalences", "equivalence", "matches"):
-                        if wrapper in result and isinstance(result[wrapper], (dict, list, str)):
-                            candidate_map.update(_flatten_equivalences(result[wrapper]))
-                    # if still empty, flatten top-level
-                    if not candidate_map:
-                        candidate_map.update(_flatten_equivalences(result))
-                else:
-                    candidate_map.update(_flatten_equivalences(result))
+                match_l = match.lower()
 
-                if verbose:
-                    self._log(f"   [LLM attempt {attempt+1}] Flattened mapping: {candidate_map}")
+                # Exact match only (conservative)
+                if match_l in candidate_lower:
+                    valid[gap] = candidate_lower[match_l]
 
-                # Filter and match to actual candidate skills with some fuzzy checks
-                valid_matches: Dict[str, str] = {}
-                for gap, match in candidate_map.items():
-                    if not match or not isinstance(match, str):
-                        continue
-                    match_lower = match.lower()
+            return valid
 
-                    # exact
-                    if match_lower in candidate_lower:
-                        valid_matches[gap] = candidate_lower[match_lower]
-                        continue
+        for attempt in range(max_retries):
+            response = self.generate_json(prompt, system_prompt=system_prompt, temperature=0.1)
 
-                    # substring / token match (e.g., 'flask' vs 'flask-restful')
-                    for cand_l, cand_orig in candidate_lower.items():
-                        if cand_l in match_lower or match_lower in cand_l:
-                            valid_matches[gap] = cand_orig
-                            break
-
-                if valid_matches:
-                    return valid_matches
-
-                if verbose:
-                    self._log(f"   [LLM attempt {attempt+1}] No valid matches after flattening: {candidate_map}")
-
-            except Exception as e:
-                if verbose:
-                    self._log(f"   [LLM attempt {attempt+1}] Error: {e}")
+            if not response:
                 continue
+
+            matches = extract_equivalences(response, candidate_lower)
+            if matches:
+                return matches
 
         return {}
 
     def _log(self, message: str) -> None:
-        print(f"[LLMService] {message}")
+        print_with_prefix("[LLMService]", message, enabled=True)
     
 

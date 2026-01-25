@@ -15,6 +15,7 @@ import numpy as np
 
 from src.services.llm_service import LLMService, OllamaNotAvailableError
 from src.services.esco_mapper import ESCOMapper
+from src.services.logging_utils import log_section, print_with_prefix
 from src.models.skill import Skill
 from src.models.candidate import CandidateProfile
 from src.models.job import JobRequirements
@@ -40,7 +41,7 @@ class MatchingAgent:
         weight_required: float = 0.7,
         weight_preferred: float = 0.2,
         weight_experience: float = 0.1,
-        fuzzy_match_threshold: float = 0.65,
+        fuzzy_match_threshold: float = 0.75,
         verbose: bool = False
     ):
         self.weight_required = weight_required
@@ -71,7 +72,7 @@ class MatchingAgent:
         # ═══════════════════════════════════════════════════════════════
         # STEP 1: Match skill REQUIRED
         # ═══════════════════════════════════════════════════════════════
-        self._log("\nStep 1: Match skill REQUIRED")
+        log_section(self._log, "Step 1: Match skill REQUIRED", width=60, char="-")
         required_matches, required_gaps = self._match_skills(
             candidate.skills, job.required_skills
         )
@@ -84,7 +85,7 @@ class MatchingAgent:
         # ═══════════════════════════════════════════════════════════════
         # STEP 2: Match skill PREFERRED
         # ═══════════════════════════════════════════════════════════════
-        self._log("\nStep 2: Match skill PREFERRED")
+        log_section(self._log, "Step 2: Match skill PREFERRED", width=60, char="-")
         preferred_matches, preferred_gaps = self._match_skills(
             candidate.skills, job.preferred_skills
         )
@@ -97,7 +98,7 @@ class MatchingAgent:
         # ═══════════════════════════════════════════════════════════════
         # STEP 3: Check esperienza
         # ═══════════════════════════════════════════════════════════════
-        self._log("\nStep 3: Check esperienza")
+        log_section(self._log, "Step 3: Check esperienza", width=60, char="-")
         experience_score = self._calculate_experience_score(
             candidate.experience_years, job.experience_years
         )
@@ -116,7 +117,7 @@ class MatchingAgent:
             preferred_score * w_pref +
             experience_score * w_exp
         )
-        self._log(f"\nSCORE FINALE: {final_score:.1f}/100")
+        self._log(f"SCORE FINALE: {final_score:.1f}/100")
         
         # ═══════════════════════════════════════════════════════════════
         # STEP 5: Genera spiegazione
@@ -393,5 +394,4 @@ class MatchingAgent:
             return " ".join(parts)
     
     def _log(self, message: str) -> None:
-        if self.verbose:
-            print(f"[MatchingAgent] {message}")
+        print_with_prefix("[MatchingAgent]", message, enabled=self.verbose)

@@ -16,6 +16,7 @@ from src.agents.candidate_agent import CandidateAgent
 from src.agents.matching_agent import MatchingAgent
 from src.services.llm_service import LLMService
 from src.services.esco_mapper import ESCOMapper
+from src.services.logging_utils import log_section, print_with_prefix
 from src.models.job import JobRequirements
 from src.models.candidate import CandidateProfile
 from src.models.match_result import MatchResult
@@ -65,7 +66,7 @@ class MatchingOrchestrator:
         llm_service: Optional[LLMService] = None,
         esco_mapper: Optional[ESCOMapper] = None,
         refinement_threshold: float = 50.0,
-        max_refinement_rounds: int = 2,
+        max_refinement_rounds: int = 1,
         verbose: bool = False
     ):
         self.refinement_threshold = refinement_threshold
@@ -142,26 +143,22 @@ class MatchingOrchestrator:
         """
         negotiation_log = []
         
-        self._log("="*70)
-        self._log("MATCHING ORCHESTRATOR: Starting Analysis")
-        self._log("="*70)
+        log_section(self._log, "MATCHING ORCHESTRATOR: Starting Analysis", width=70, char="=")
         
         # ═══════════════════════════════════════════════════════════════
         # PHASE 1: Initial Analysis
         # ═══════════════════════════════════════════════════════════════
-        self._log("\n" + "─"*70)
-        self._log("PHASE 1: Initial Analysis")
-        self._log("─"*70)
+        log_section(self._log, "PHASE 1: Initial Analysis", width=70, char="-")
         
         # Job Agent analizza JD
-        self._log("\nCalling JobAgent...")
+        self._log("Calling JobAgent...")
         job_requirements = self.job_agent.analyze(job_description)
         self._log(f"   -> Job: {job_requirements.job_title}")
         self._log(f"   -> Required: {len(job_requirements.required_skills)} skills")
         self._log(f"   -> Preferred: {len(job_requirements.preferred_skills)} skills")
         
         # Candidate Agent analizza CV
-        self._log("\nCalling CandidateAgent...")
+        self._log("Calling CandidateAgent...")
         candidate_profile = self.candidate_agent.analyze(cv_input)
         self._log(f"   -> Candidate: {candidate_profile.name}")
         self._log(f"   -> Skills: {len(candidate_profile.skills)}")
@@ -183,11 +180,9 @@ class MatchingOrchestrator:
         # ═══════════════════════════════════════════════════════════════
         # PHASE 2: Initial Matching
         # ═══════════════════════════════════════════════════════════════
-        self._log("\n" + "─"*70)
-        self._log("PHASE 2: Initial Matching")
-        self._log("─"*70)
+        log_section(self._log, "PHASE 2: Initial Matching", width=70, char="-")
         
-        self._log("\nCalling MatchingAgent...")
+        self._log("Calling MatchingAgent...")
         match_result = self.matching_agent.match(candidate_profile, job_requirements)
         initial_score = match_result.score
         
@@ -210,17 +205,20 @@ class MatchingOrchestrator:
         rounds_done = 0
         
         if enable_refinement and current_score < self.refinement_threshold and match_result.gaps:
-            self._log("\n" + "─"*70)
-            self._log(f"PHASE 3: Negotiation (score {current_score:.1f} < {self.refinement_threshold})")
-            self._log("─"*70)
+            log_section(
+                self._log,
+                f"PHASE 3: Negotiation (score {current_score:.1f} < {self.refinement_threshold})",
+                width=70,
+                char="-",
+            )
             
             for round_num in range(1, self.max_refinement_rounds + 1):
-                self._log(f"\nROUND {round_num}")
+                self._log(f"ROUND {round_num}")
                 score_before = current_score
                 gaps = match_result.gaps
                 
                 # ─── Step A: CandidateAgent cerca skill implicite ───
-                self._log("\nCandidateAgent: Looking for implicit skills...")
+                self._log("CandidateAgent: Looking for implicit skills...")
                 candidate_skills_names = [s.esco_name or s.name for s in candidate_profile.skills]
                 job_required_names = [s.esco_name or s.name for s in job_requirements.required_skills]
                 
@@ -245,7 +243,7 @@ class MatchingOrchestrator:
                     ))
                 
                 # ─── Step B: JobAgent rilassa requisiti ───
-                self._log("\nJobAgent: Considering requirement relaxation...")
+                self._log("JobAgent: Considering requirement relaxation...")
                 candidate_skills_names = [s.esco_name or s.name for s in candidate_profile.skills]
                 
                 refined_job = self.job_agent.refine_requirements(
@@ -269,7 +267,7 @@ class MatchingOrchestrator:
                     ))
                 
                 # ─── Step C: Ricalcola match ───
-                self._log("\nMatchingAgent: Recalculating...")
+                self._log("MatchingAgent: Recalculating...")
                 match_result = self.matching_agent.match(candidate_profile, job_requirements)
                 current_score = match_result.score
                 
@@ -292,24 +290,22 @@ class MatchingOrchestrator:
                 
                 # Se score è migliorato abbastanza, ferma
                 if current_score >= self.refinement_threshold:
-                    self._log(f"\nThreshold reached, stopping refinement")
+                    self._log("Threshold reached, stopping refinement")
                     break
                 
                 # Se non c'è miglioramento, ferma
                 if current_score <= score_before:
-                    self._log(f"\nNo improvement, stopping refinement")
+                    self._log("No improvement, stopping refinement")
                     break
         
         # ═══════════════════════════════════════════════════════════════
         # PHASE 4: Final Result
         # ═══════════════════════════════════════════════════════════════
-        self._log("\n" + "─"*70)
-        self._log("FINAL RESULT")
-        self._log("─"*70)
+        log_section(self._log, "FINAL RESULT", width=70, char="-")
         
         score_improvement = current_score - initial_score
         
-        self._log(f"\n   Initial Score: {initial_score:.1f}")
+        self._log(f"   Initial Score: {initial_score:.1f}")
         self._log(f"   Final Score:   {current_score:.1f}")
         self._log(f"   Improvement:   {score_improvement:+.1f}")
         self._log(f"   Rounds:        {rounds_done + 1}")
@@ -327,8 +323,7 @@ class MatchingOrchestrator:
     
     def _log(self, message: str) -> None:
         """Conditional logging."""
-        if self.verbose:
-            print(f"[Orchestrator] {message}")
+        print_with_prefix("[Orchestrator]", message, enabled=self.verbose)
 
 
 # ═══════════════════════════════════════════════════════════════════════════

@@ -5,6 +5,7 @@
 
 # LLM Locale
 ollama>=0.1.0
+openai>=1.0.0
 
 
 # ESCO mapping (similarity search)

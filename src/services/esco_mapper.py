@@ -20,6 +20,7 @@ from sentence_transformers import SentenceTransformer
 from typing import Optional, Tuple, List
 from pathlib import Path
 
+from src.services.logging_utils import print_with_prefix
 
 class ESCOMapper:
     """
@@ -38,7 +39,7 @@ class ESCOMapper:
         esco_csv_path: str = "data/esco/skills_it.csv",  # Default: italiano
         custom_csv_path: str = "data/custom_tech_skills.csv",
         model_name: str = "paraphrase-multilingual-MiniLM-L12-v2",
-        similarity_threshold: float = 0.5,
+        similarity_threshold: float = 0.7,
         use_custom_skills: bool = True,
         cache_dir: str = "data/cache" 
     ):
@@ -407,4 +408,4 @@ class ESCOMapper:
         return results
 
     def _log(self, message: str) -> None:
-        print(f"[ESCOMapper] {message}")
+        print_with_prefix("[ESCOMapper]", message, enabled=True)

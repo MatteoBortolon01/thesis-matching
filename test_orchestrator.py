@@ -9,24 +9,50 @@ from src.orchestrator import match_cv_to_job, MatchingOrchestrator
 # ═══════════════════════════════════════════════════════════════════════════
 
 TEST_CV = """
-Marco Bianchi
-Software Engineer
+Name: Marco Rossi
+Location: Milano, Italy
+Role: Backend Engineer
+Years of experience: 5
 
-ESPERIENZA: 4 anni
+Professional summary:
+Backend engineer with 5 years of experience building APIs and microservices in Python.
+Strong focus on reliability, testing, and collaboration.
 
-COMPETENZE TECNICHE:
-- Python, JavaScript
-- Flask, React
-- PostgreSQL, MongoDB
-- Docker, Git
-- REST API, Agile
+Experience:
+Backend Engineer, PayLine SRL (2022 - present)
+- Built REST APIs with FastAPI and PostgreSQL
+- Implemented background jobs and integrations
+- Wrote tests with pytest and maintained GitHub Actions pipelines
+- Deployed services using Docker and Kubernetes on AWS (ECS, RDS, S3)
 
-ISTRUZIONE:
-Laurea in Informatica - Università di Roma (2020)
+Software Engineer, CloudBridge (2020 - 2022)
+- Developed Python services with Django and FastAPI
+- Maintained CI/CD pipelines and Linux deployments
+- Worked with Redis and RabbitMQ
 
-LINGUE:
-- Italiano: Madrelingua
-- Inglese: B2
+Technical skills:
+- Python, FastAPI, Django
+- PostgreSQL, Redis
+- Docker, Kubernetes
+- AWS (ECS, RDS, S3)
+- Git, GitHub Actions
+- Linux
+- REST APIs, pytest
+- Terraform (basic)
+
+Soft skills:
+- teamwork
+- communication
+- problem solving
+- time management
+- mentoring
+
+Education:
+MSc in Computer Engineering, Politecnico di Milano
+
+Languages:
+- Italian: Native
+- English: B2
 """
 
 TEST_JD = """
@@ -51,7 +77,48 @@ ESPERIENZA: minimo 3 anni
 
 SEDE: Milano, ibrido
 """
+TEST_JD1 = """Title: Backend Engineer (Python)
+Company: FinTechWave S.p.A.
+Location: Milano
+Remote policy: Hybrid (2 giorni in ufficio)
 
+Summary:
+We are looking for a Backend Engineer to build and maintain scalable APIs for our payment platform.
+
+Responsibilities:
+- Design and implement REST APIs
+- Maintain microservices and background jobs
+- Collaborate with product and data teams
+- Write tests and support CI/CD pipelines
+
+Requirements (must have):
+- 3+ years of backend development experience
+- Python
+- FastAPI
+- PostgreSQL
+- REST API design
+- Docker
+- Git
+- Linux
+- Testing with pytest
+- CI/CD pipelines
+- Soft skills: teamwork, communication, problem solving
+
+Preferred (nice to have):
+- AWS (ECS, RDS, S3)
+- Kubernetes
+- Redis
+- RabbitMQ
+- Terraform
+- GraphQL
+- Soft skills: leadership, mentoring
+
+Languages:
+- English B2 or higher
+- Italian B2 or higher
+
+Notes:
+We value proactive attitude and clear communication."""
 
 def test_orchestrator():
     """Test completo dell'orchestrator."""
@@ -62,7 +129,7 @@ def test_orchestrator():
     # Esegui matching con negoziazione
     result = match_cv_to_job(
         cv_input=TEST_CV,
-        job_description=TEST_JD,
+        job_description=TEST_JD1,
         verbose=True,
         enable_refinement=True
     )

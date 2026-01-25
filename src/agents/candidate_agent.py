@@ -18,6 +18,7 @@ from PyPDF2 import PdfReader
 
 from src.services.llm_service import LLMService
 from src.services.esco_mapper import ESCOMapper
+from src.services.logging_utils import log_section, print_with_prefix
 from src.models.skill import Skill
 from src.models.candidate import CandidateProfile, Language
 
@@ -84,16 +85,21 @@ class CandidateAgent:
         # STEP 1: Estrazione testo
         # ═══════════════════════════════════════════════════════════════
         if cv_input.endswith('.pdf') and Path(cv_input).exists():
-            self._log("Step 1: Estrazione testo da PDF...")
+            log_section(self._log, "Step 1: Estrazione testo da PDF...", width=60, char="-")
             cv_text = self._extract_text_from_pdf(cv_input)
         else:
             cv_text = cv_input
-            self._log(f"Step 1: Input è già testo ({len(cv_text)} caratteri)")
+            log_section(
+                self._log,
+                f"Step 1: Input è già testo ({len(cv_text)} caratteri)",
+                width=60,
+                char="-",
+            )
         
         # ═══════════════════════════════════════════════════════════════
         # STEP 2: Estrazione info con LLM
         # ═══════════════════════════════════════════════════════════════
-        self._log("Step 2: Estrazione informazioni con LLM...")
+        log_section(self._log, "Step 2: Estrazione informazioni con LLM...", width=60, char="-")
         cv_info = self.llm_service.extract_cv_info(cv_text)
         
         name = cv_info.get("name")
@@ -113,7 +119,7 @@ class CandidateAgent:
         # ═══════════════════════════════════════════════════════════════
         # STEP 3: Costruzione lista skill raw
         # ═══════════════════════════════════════════════════════════════
-        self._log("Step 3: Costruzione lista skill...")
+        log_section(self._log, "Step 3: Costruzione lista skill...", width=60, char="-")
         raw_skills = []
         
         for skill_info in technical_skills:
@@ -134,7 +140,7 @@ class CandidateAgent:
         # STEP 4: Deduplicazione
         # ═══════════════════════════════════════════════════════════════
         if self.enable_deduplication:
-            self._log("Step 4: Deduplicazione...")
+            log_section(self._log, "Step 4: Deduplicazione...", width=60, char="-")
             deduplicated_skills = self._deduplicate_skills(raw_skills)
             self._log(f"   -> {len(deduplicated_skills)}/{len(raw_skills)} skill uniche")
         else:
@@ -143,7 +149,7 @@ class CandidateAgent:
         # ═══════════════════════════════════════════════════════════════
         # STEP 5: Normalizzazione ESCO
         # ═══════════════════════════════════════════════════════════════
-        self._log("Step 5: Normalizzazione ESCO...")
+        log_section(self._log, "Step 5: Normalizzazione ESCO...", width=60, char="-")
         normalized_skills = self._normalize_skills(deduplicated_skills)
         self._log(f"   -> {len(normalized_skills)} skill normalizzate")
         
@@ -248,7 +254,7 @@ class CandidateAgent:
         Chiamato dall'Orchestrator durante la negoziazione.
         Ri-analizza il CV cercando skill correlate ai gap.
         """
-        self._log("\nCANDIDATE AGENT: Refining profile...")
+        self._log("CANDIDATE AGENT: Refining profile...")
         self._log(f"   Current gaps: {gaps}")
         
         if len(gaps) == 0:
@@ -259,31 +265,70 @@ class CandidateAgent:
         cv_text = candidate_profile.raw_text or ""
         current_skills = [s.esco_name or s.name for s in candidate_profile.skills]
         
-        prompt = f"""CV excerpt: {cv_text[:1500]}
+        prompt = f"""You are CandidateAgent, an autonomous agent representing the candidate.
 
-Current extracted skills: {', '.join(current_skills[:20])}
+Your objective is to maximize job opportunity WITHOUT fabricating skills.
+You may only infer skills that are reasonably supported by the CV text.
 
-Missing skills needed for job: {', '.join(gaps)}
+CONTEXT:
+- Missing job-required skills (gaps): {gaps}
+- Job required skills: {job_required_skills}
+- Currently extracted skills: {current_skills}
 
-Look for IMPLICIT or RELATED skills in the CV that weren't explicitly extracted but could partially cover the gaps.
-Examples:
-- If "CI/CD" is missing but CV mentions "automated deployments" → that's implicit CI/CD
-- If "Docker" is missing but CV mentions "containerization" → that's implicit Docker
-- If "SQL" is missing but CV mentions "database queries" → that's implicit SQL
+CV EXCERPT:
+{cv_text}
 
-Return JSON with skills found: {{"implicit_skills": ["skill1", "skill2"]}}
-If no implicit skills found, return: {{"implicit_skills": []}}
+RULES:
+- You may propose ONLY skills that are:
+    - implicitly mentioned in the CV
+    - strongly related to candidate experience
+    - defensible as partial or foundational equivalents
+- You MUST NOT invent skills not supported by the CV
+- If no reasonable implicit skills exist, you MUST refuse.
+
+DECISION TASK:
+Evaluate whether the CV supports implicit skills that could partially cover job gaps.
+
+If YES:
+- Decide WHICH implicit skills are defensible
+- Explain WHY each one is justified based on the CV
+
+If NO:
+- Explicitly refuse and explain WHY no implicit skills can be claimed
+
+OUTPUT FORMAT (JSON ONLY):
+
+{{
+    "decision": "ADD_IMPLICIT" | "REFUSE",
+    "implicit_skills": ["skill1", "skill2"],
+    "reasoning": "Concise justification grounded in CV evidence"
+}}
+
+IMPORTANT:
+- Do NOT repeat skills already extracted
+- Do NOT exceed 2 skills
+- Conservative behavior is preferred over overclaiming
 
 JSON:"""
 
         result = self.llm_service.generate_json(prompt, temperature=0.2)
-        implicit_skills = result.get("implicit_skills", []) if result else []
-        
-        if not implicit_skills:
-            self._log("   -> No implicit skills found")
+        decision = result.get("decision") if result else None
+        reasoning = result.get("reasoning", "N/A") if result else "N/A"
+
+        if decision != "ADD_IMPLICIT":
+            self._log("   -> CandidateAgent refused to add implicit skills")
+            self._log(f"   Reasoning: {reasoning}")
             return candidate_profile
-        
-        self._log(f"   -> Found implicit skills: {implicit_skills}")
+
+        implicit_skills = result.get("implicit_skills", [])[:2]
+
+        if not implicit_skills:
+            self._log("   -> No implicit skills identified")
+            return candidate_profile
+
+        self._log("   -> CandidateAgent decided to add implicit skills")
+        self._log(f"   Skills: {implicit_skills}")
+        self._log(f"   Reasoning: {reasoning}")
         
         # Normalizza e aggiungi le skill implicite
         new_skills = list(candidate_profile.skills)
@@ -318,5 +363,4 @@ JSON:"""
         )
     
     def _log(self, message: str) -> None:
-        if self.verbose:
-            print(f"[CandidateAgent] {message}")
+        print_with_prefix("[CandidateAgent]", message, enabled=self.verbose)
