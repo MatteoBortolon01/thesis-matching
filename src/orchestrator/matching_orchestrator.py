@@ -217,6 +217,11 @@ class MatchingOrchestrator:
                 score_before = current_score
                 gaps = match_result.gaps
                 
+                # Salva stato pre-refinement per rollback
+                prev_match_result = match_result
+                prev_candidate_profile = candidate_profile
+                prev_job_requirements = job_requirements
+                
                 # ─── Step A: CandidateAgent cerca skill implicite ───
                 self._log("CandidateAgent: Looking for implicit skills...")
                 candidate_skills_names = [s.esco_name or s.name for s in candidate_profile.skills]
@@ -272,6 +277,26 @@ class MatchingOrchestrator:
                 current_score = match_result.score
                 
                 self._log(f"   -> New Score: {current_score:.1f}/100 (was {score_before:.1f})")
+                
+                # Se il refinement ha peggiorato lo score, rollback
+                if current_score < score_before:
+                    self._log(f"   -> Score decreased ({score_before:.1f} -> {current_score:.1f}), rolling back to pre-refinement state")
+                    match_result = prev_match_result
+                    candidate_profile = prev_candidate_profile
+                    job_requirements = prev_job_requirements
+                    current_score = score_before
+                    
+                    negotiation_log.append(NegotiationRound(
+                        round_number=round_num,
+                        action="rollback",
+                        agent="Orchestrator",
+                        details=f"Refinement decreased score, reverted to {score_before:.1f}",
+                        score_before=score_before,
+                        score_after=score_before
+                    ))
+                    
+                    rounds_done = round_num
+                    break
                 
                 # Update last negotiation log with new score
                 if negotiation_log:

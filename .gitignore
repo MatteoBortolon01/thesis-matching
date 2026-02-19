@@ -43,6 +43,7 @@ data/*.npy
 data/sample_cvs/
 data/sample_jobs/
 data/esco/
+data/validation/
 
 # Misc
 *.log

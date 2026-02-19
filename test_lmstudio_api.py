@@ -1,13 +1,17 @@
+import os
+from dotenv import load_dotenv
 from openai import OpenAI
 
+load_dotenv()
+
 # Endpoint LM Studio (dietro VPN UNITN)
-BASE_URL = "http://bears.disi.unitn.it:1234/v1"
+BASE_URL = os.getenv("LMSTUDIO_BASE_URL", "http://llm.bears.disi.unitn.it/v1")
 
-# LM Studio ignora la key, ma l'SDK la richiede
-API_KEY = "lmstudio"
+# API key da .env
+API_KEY = os.getenv("LMSTUDIO_API_KEY", "lmstudio")
 
-# Modello consigliato
-MODEL = "meta-llama-3.1-8b-instruct"
+# Modello da .env
+MODEL = os.getenv("LMSTUDIO_MODEL", "meta/llama-3.3-70b")
 
 def main():
     client = OpenAI(
@@ -16,6 +20,7 @@ def main():
     )
 
     print("Sending test request to LM Studio...")
+    print(f"Using model: {MODEL}")
 
     response = client.chat.completions.create(
         model=MODEL,

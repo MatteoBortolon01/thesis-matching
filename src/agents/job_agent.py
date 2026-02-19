@@ -140,50 +140,7 @@ class JobAgent:
             return job_requirements
         
         # Chiedi all'LLM quali required potrebbero essere rilassati
-        prompt = f"""You are JobAgent, an autonomous agent representing the employer's perspective.
-
-Your objective is to preserve job quality and reduce hiring risk, 
-while enabling a feasible match if reasonable compromises exist.
-
-CONTEXT:
-- Missing required skills (gaps): {gaps}
-- Candidate current skills: {candidate_skills}
-- Current number of gaps: {len(gaps)}
-
-RULES:
-- You may relax AT MOST 1–2 required skills.
-- Only relax skills that:
-    - are NOT core to the role
-    - can realistically be learned on the job
-    - have partial or transferable equivalents in candidate skills
-- If relaxing skills would significantly increase mismatch risk, you MUST refuse.
-
-DECISION TASK:
-Evaluate whether relaxing any required skills is acceptable.
-
-If YES:
-- Decide WHICH skills to relax
-- Explain WHY each skill is acceptable to relax
-
-If NO:
-- Explicitly refuse and explain WHY no relaxation is acceptable
-
-OUTPUT FORMAT (JSON ONLY):
-
-{{
-    "decision": "RELAX" | "REFUSE",
-    "relaxable_skills": ["skill1", "skill2"],
-    "reasoning": "Concise explanation of the decision from the employer perspective"
-}}
-
-IMPORTANT:
-- Do NOT suggest skills outside the provided gaps
-- Do NOT exceed 2 skills
-- Be conservative: refusing is acceptable if justified
-
-JSON:"""
-
-        result = self.llm_service.generate_json(prompt, temperature=0.2)
+        result = self.llm_service.refine_requirements(gaps, candidate_skills)
         decision = result.get("decision") if result else None
         reasoning = result.get("reasoning", "N/A") if result else "N/A"
 

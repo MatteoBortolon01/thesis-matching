@@ -9,8 +9,12 @@ import re
 from typing import Optional, List, Dict, Any
 
 import ollama
+from dotenv import load_dotenv
 
 from src.services.logging_utils import log_section, print_with_prefix
+
+# Carica variabili da .env (se presente)
+load_dotenv()
 
 class OllamaNotAvailableError(Exception):
     """Eccezione per quando Ollama non è disponibile."""
@@ -31,7 +35,7 @@ class LLMService:
         provider: str = "lmstudio",  # "ollama" o "lmstudio"
         lmstudio_base_url: Optional[str] = None,
         lmstudio_api_key: Optional[str] = None,
-        lmstudio_model: Optional[str] = "meta-llama-3.1-8b-instruct"
+        lmstudio_model: Optional[str] = None
     ):
         """
         Inizializza il servizio LLM.
@@ -50,13 +54,13 @@ class LLMService:
         if self.provider not in {"ollama", "lmstudio"}:
             raise ValueError("provider deve essere 'ollama' o 'lmstudio'")
 
-        self.model = lmstudio_model or model
+        self.model = model if self.provider == "ollama" else (lmstudio_model or os.getenv("LMSTUDIO_MODEL") or model)
         self.temperature = temperature
         self.timeout = timeout
         self.num_gpu = num_gpu
         self.is_available = False
         self._lmstudio_client = None
-        self.lmstudio_base_url = lmstudio_base_url or os.getenv("LMSTUDIO_BASE_URL", "http://bears.disi.unitn.it:1234/v1")
+        self.lmstudio_base_url = lmstudio_base_url or os.getenv("LMSTUDIO_BASE_URL", "http://llm.bears.disi.unitn.it/v1")
         self.lmstudio_api_key = lmstudio_api_key or os.getenv("LMSTUDIO_API_KEY", "lmstudio")
         
         # Verifica provider
@@ -304,7 +308,8 @@ RULES:
 - Soft skills examples: communication, teamwork, leadership, problem solving, time management
 - Do NOT include years of experience or seniority phrases as skills (e.g., "3+ years of backend development experience")
 - If a requirement mixes years and a skill, extract ONLY the skill (e.g., "3+ years of Python" -> "Python")
-- If not specified, consider skills as required
+- SOFT SKILLS CLASSIFICATION: soft skills must be placed in "required_skills" ONLY if the job description explicitly marks them as required/mandatory/essential. If a soft skill is merely mentioned or listed without an explicit mandatory qualifier, place it in "preferred_skills"
+- For TECHNICAL skills only: if not explicitly marked as preferred/optional, consider them as required
 - "experience_years": integer, 0 if not specified
 - Extract SPECIFIC skills, avoid vague phrases (e.g., "strong background")
 - "languages_required": MANDATORY languages with level
@@ -492,6 +497,10 @@ JSON:"""
         Returns:
             Spiegazione in linguaggio naturale
         """
+        system_prompt = """You are an expert HR analyst generating concise candidate-job match summaries.
+Your explanations must be factual, professional, and based strictly on the data provided.
+Do not infer or add information beyond what is given."""
+
         # Prompt compatto in inglese
         matched_str = ', '.join(matched_skills[:10]) if matched_skills else 'none'
         gaps_str = ', '.join(missing_required[:5]) if missing_required else 'none'
@@ -512,7 +521,7 @@ Rules:
 - Do not present higher experience as a negative
 - Keep tone concise and professional."""
 
-        return self.generate(prompt, temperature=0.3)
+        return self.generate(prompt, system_prompt=system_prompt, temperature=0.3)
     
     def reason_skill_equivalence(
         self,
@@ -528,11 +537,19 @@ Rules:
         """
         if not gap_skills or not candidate_skills:
             return {}
-        
-        gaps_str = ', '.join(gap_skills[:10])
-        cand_str = ', '.join(candidate_skills[:30])
-        
-        system_prompt = """You are a Skill Equivalence Evaluator.
+
+        gap_skills = [s for s in gap_skills if isinstance(s, str) and s.strip()]
+        candidate_skills = [s for s in candidate_skills if isinstance(s, str) and s.strip()]
+        if not gap_skills or not candidate_skills:
+            return {}
+
+        gaps_for_prompt = gap_skills[:10]
+        cands_for_prompt = candidate_skills[:30]
+
+        gaps_str = ', '.join(gaps_for_prompt)
+        cand_str = ', '.join(cands_for_prompt)
+
+        system_prompt = system_prompt or """You are a Skill Equivalence Evaluator.
 
 Your task is to determine whether two technical skills can be considered
 functionally equivalent in a professional recruiting context.
@@ -592,8 +609,16 @@ IMPORTANT:
 JSON:"""
 
         candidate_lower = {s.lower(): s for s in candidate_skills}
+        gap_lower = {s.lower(): s for s in gap_skills}
 
-        def extract_equivalences(result: dict, candidate_lower: dict) -> Dict[str, str]:
+        if verbose:
+            log_section(self._log, "LLM SKILL EQUIVALENCE REASONING", width=60, char="=")
+            self._log(f"Input gaps: {len(gap_skills)} (prompt uses {len(gaps_for_prompt)})")
+            self._log(f"Input candidate skills: {len(candidate_skills)} (prompt uses {len(cands_for_prompt)})")
+            self._log(f"Gaps: {gap_skills}")
+            self._log("=" * 60)
+
+        def extract_equivalences(result: dict) -> Dict[str, str]:
             """
             Extract validated skill equivalences from a strict LLM JSON response.
             Expected format:
@@ -606,9 +631,18 @@ JSON:"""
             if not isinstance(result, dict):
                 return {}
 
-            matches = result.get("matches")
-            if not isinstance(matches, dict):
-                return {}
+            matches_obj = result.get("matches")
+            if isinstance(matches_obj, dict):
+                matches = matches_obj
+            else:
+                # Backward compatibility with the "flat mapping" format
+                matches = {
+                    k: v
+                    for k, v in result.items()
+                    if isinstance(k, str) and isinstance(v, str)
+                }
+                if not matches:
+                    return {}
 
             valid: Dict[str, str] = {}
 
@@ -616,25 +650,174 @@ JSON:"""
                 if not isinstance(gap, str) or not isinstance(match, str):
                     continue
 
+                gap_key = gap_lower.get(gap.lower())
+                if not gap_key:
+                    if verbose:
+                        self._log(f"REJECT '{gap}' -> '{match}': gap not in requested gaps")
+                    continue
+
                 match_l = match.lower()
 
                 # Exact match only (conservative)
                 if match_l in candidate_lower:
-                    valid[gap] = candidate_lower[match_l]
+                    valid[gap_key] = candidate_lower[match_l]
+                elif verbose:
+                    self._log(f"REJECT '{gap_key}' -> '{match}': candidate skill not in provided list")
 
             return valid
 
         for attempt in range(max_retries):
+            if verbose:
+                self._log(f"Attempt {attempt + 1}/{max_retries}: calling LLM...")
             response = self.generate_json(prompt, system_prompt=system_prompt, temperature=0.1)
 
             if not response:
+                if verbose:
+                    self._log("No JSON parsed from LLM response.")
                 continue
 
-            matches = extract_equivalences(response, candidate_lower)
-            if matches:
-                return matches
+            if verbose:
+                self._log("Raw LLM JSON:")
+                self._log(json.dumps(response, ensure_ascii=False, indent=2))
 
+            matches = extract_equivalences(response)
+            if matches:
+                if verbose:
+                    self._log(f"Accepted equivalences ({len(matches)}): {matches}")
+                return matches
+            if verbose:
+                self._log("No valid equivalences accepted from this response.")
+
+        if verbose:
+            self._log("No valid equivalences found after retries.")
         return {}
+
+    def refine_requirements(
+        self,
+        gaps: List[str],
+        candidate_skills: List[str]
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Chiede all'LLM quali required skills potrebbero essere rilassate.
+
+        Args:
+            gaps: Skill required mancanti
+            candidate_skills: Skill attuali del candidato
+
+        Returns:
+            Dizionario con decision, relaxable_skills, reasoning oppure None
+        """
+        system_prompt = """You are JobAgent, an autonomous agent representing the employer's perspective.
+Your objective is to preserve job quality and reduce hiring risk,
+while enabling a feasible match if reasonable compromises exist.
+Always respond with valid JSON only."""
+
+        prompt = f"""CONTEXT:
+- Missing required skills (gaps): {gaps}
+- Candidate current skills: {candidate_skills}
+- Current number of gaps: {len(gaps)}
+
+RULES:
+- You may relax AT MOST 1–2 required skills.
+- Only relax skills that:
+    - are NOT core to the role
+    - can realistically be learned on the job
+    - have partial or transferable equivalents in candidate skills
+- If relaxing skills would significantly increase mismatch risk, you MUST refuse.
+
+DECISION TASK:
+Evaluate whether relaxing any required skills is acceptable.
+
+If YES:
+- Decide WHICH skills to relax
+- Explain WHY each skill is acceptable to relax
+
+If NO:
+- Explicitly refuse and explain WHY no relaxation is acceptable
+
+OUTPUT FORMAT (JSON ONLY):
+
+{{{{
+    "decision": "RELAX" | "REFUSE",
+    "relaxable_skills": ["skill1", "skill2"],
+    "reasoning": "Concise explanation of the decision from the employer perspective"
+}}}}
+
+IMPORTANT:
+- Do NOT suggest skills outside the provided gaps
+- Do NOT exceed 2 skills
+- Be conservative: refusing is acceptable if justified
+
+JSON:"""
+
+        return self.generate_json(prompt, system_prompt=system_prompt, temperature=0.2)
+
+    def refine_profile(
+        self,
+        gaps: List[str],
+        job_required_skills: List[str],
+        current_skills: List[str],
+        cv_text: str
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Chiede all'LLM di cercare skill implicite nel CV per coprire i gap.
+
+        Args:
+            gaps: Skill required mancanti
+            job_required_skills: Tutte le skill required dalla JD
+            current_skills: Skill attualmente estratte dal candidato
+            cv_text: Estratto del CV
+
+        Returns:
+            Dizionario con decision, implicit_skills, reasoning oppure None
+        """
+        system_prompt = """You are CandidateAgent, an autonomous agent representing the candidate.
+Your objective is to maximize job opportunity WITHOUT fabricating skills.
+You may only infer skills that are reasonably supported by the CV text.
+Always respond with valid JSON only."""
+
+        prompt = f"""CONTEXT:
+- Missing job-required skills (gaps): {gaps}
+- Job required skills: {job_required_skills}
+- Currently extracted skills: {current_skills}
+
+CV EXCERPT:
+{cv_text}
+
+RULES:
+- You may propose ONLY skills that are:
+    - implicitly mentioned in the CV
+    - strongly related to candidate experience
+    - defensible as partial or foundational equivalents
+- You MUST NOT invent skills not supported by the CV
+- If no reasonable implicit skills exist, you MUST refuse.
+
+DECISION TASK:
+Evaluate whether the CV supports implicit skills that could partially cover job gaps.
+
+If YES:
+- Decide WHICH implicit skills are defensible
+- Explain WHY each one is justified based on the CV
+
+If NO:
+- Explicitly refuse and explain WHY no implicit skills can be claimed
+
+OUTPUT FORMAT (JSON ONLY):
+
+{{{{
+    "decision": "ADD_IMPLICIT" | "REFUSE",
+    "implicit_skills": ["skill1", "skill2"],
+    "reasoning": "Concise justification grounded in CV evidence"
+}}}}
+
+IMPORTANT:
+- Do NOT repeat skills already extracted
+- Do NOT exceed 2 skills
+- Conservative behavior is preferred over overclaiming
+
+JSON:"""
+
+        return self.generate_json(prompt, system_prompt=system_prompt, temperature=0.2)
 
     def _log(self, message: str) -> None:
         print_with_prefix("[LLMService]", message, enabled=True)

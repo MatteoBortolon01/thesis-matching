@@ -1,6 +1,6 @@
 from pydantic import BaseModel
 from src.models.skill import Skill
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 
 
 class Language(BaseModel):
@@ -15,4 +15,7 @@ class CandidateProfile(BaseModel):
     experience_years: int = 0
     education: Optional[List[str]] = None
     languages: List[Language] = []      # Lingue parlate
+    job_title: Optional[str] = None
+    certifications: List[str] = []
+    llm_extracted: Optional[Dict[str, Any]] = None  # JSON grezzo restituito da extract_cv_info
     raw_text: Optional[str] = None

@@ -103,6 +103,7 @@ class CandidateAgent:
         cv_info = self.llm_service.extract_cv_info(cv_text)
         
         name = cv_info.get("name")
+        job_title = cv_info.get("job_title")
         experience_years = cv_info.get("experience_years", 0)
         education = cv_info.get("education")
         technical_skills = cv_info.get("technical_skills", [])
@@ -169,6 +170,9 @@ class CandidateAgent:
             experience_years=experience_years,
             education=education_list,
             languages=languages,
+            job_title=job_title,
+            certifications=certifications if isinstance(certifications, list) else [],
+            llm_extracted=cv_info,
             raw_text=cv_text[:500] + "..." if len(cv_text) > 500 else cv_text
         )
     
@@ -264,54 +268,8 @@ class CandidateAgent:
         # Chiedi all'LLM di cercare skill implicite nel CV
         cv_text = candidate_profile.raw_text or ""
         current_skills = [s.esco_name or s.name for s in candidate_profile.skills]
-        
-        prompt = f"""You are CandidateAgent, an autonomous agent representing the candidate.
 
-Your objective is to maximize job opportunity WITHOUT fabricating skills.
-You may only infer skills that are reasonably supported by the CV text.
-
-CONTEXT:
-- Missing job-required skills (gaps): {gaps}
-- Job required skills: {job_required_skills}
-- Currently extracted skills: {current_skills}
-
-CV EXCERPT:
-{cv_text}
-
-RULES:
-- You may propose ONLY skills that are:
-    - implicitly mentioned in the CV
-    - strongly related to candidate experience
-    - defensible as partial or foundational equivalents
-- You MUST NOT invent skills not supported by the CV
-- If no reasonable implicit skills exist, you MUST refuse.
-
-DECISION TASK:
-Evaluate whether the CV supports implicit skills that could partially cover job gaps.
-
-If YES:
-- Decide WHICH implicit skills are defensible
-- Explain WHY each one is justified based on the CV
-
-If NO:
-- Explicitly refuse and explain WHY no implicit skills can be claimed
-
-OUTPUT FORMAT (JSON ONLY):
-
-{{
-    "decision": "ADD_IMPLICIT" | "REFUSE",
-    "implicit_skills": ["skill1", "skill2"],
-    "reasoning": "Concise justification grounded in CV evidence"
-}}
-
-IMPORTANT:
-- Do NOT repeat skills already extracted
-- Do NOT exceed 2 skills
-- Conservative behavior is preferred over overclaiming
-
-JSON:"""
-
-        result = self.llm_service.generate_json(prompt, temperature=0.2)
+        result = self.llm_service.refine_profile(gaps, job_required_skills, current_skills, cv_text)
         decision = result.get("decision") if result else None
         reasoning = result.get("reasoning", "N/A") if result else "N/A"
 
@@ -359,6 +317,9 @@ JSON:"""
             experience_years=candidate_profile.experience_years,
             education=candidate_profile.education,
             languages=candidate_profile.languages,
+            job_title=candidate_profile.job_title,
+            certifications=candidate_profile.certifications,
+            llm_extracted=candidate_profile.llm_extracted,
             raw_text=candidate_profile.raw_text
         )
     

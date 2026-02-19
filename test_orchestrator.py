@@ -151,11 +151,15 @@ def test_orchestrator():
     print(f"\nSCORE")
     print(f"Iniziale: {result.initial_score:.1f}/100")
     print(f"Finale:   {result.final_score:.1f}/100")
-    print(f"Δ:        {result.score_improvement:+.1f}")
+    print(f"Delta:    {result.score_improvement:+.1f}")
     
     print(f"\nMatch Details")
-    print(f"Matched: {result.match_result.matched_skills[:5]}")
-    print(f"Gaps:    {result.match_result.gaps[:5]}")
+    print(f"Matched ({len(result.match_result.matched_skills)}):")
+    for s in result.match_result.matched_skills:
+        print(f" - {s}")
+    print(f"Gaps ({len(result.match_result.gaps)}):")
+    for s in result.match_result.gaps:
+        print(f" - {s}")
     
     # ═══════════════════════════════════════════════════════════════
     # LOG NEGOZIAZIONE

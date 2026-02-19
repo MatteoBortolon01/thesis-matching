@@ -110,7 +110,7 @@ thesis-matching/
 │   ├── services/              # SERVIZI
 │   │   ├── __init__.py
 │   │   ├── esco_mapper.py     # Embeddings → ESCO (numpy)
-│   │   └── llm_service.py     # Wrapper Ollama
+│   │   └── llm_service.py     # Wrapper LLM
 │   │
 │   ├── agents/                # AGENTI (Custom Classes)
 │   │   ├── __init__.py
@@ -304,5 +304,19 @@ Apri browser: `http://localhost:8501 └── Job Parser estrae: requisiti, ski
 - Relazioni semantiche tra skill
 
 ---
+
+## Batch validation (CV x JD)
+
+Per eseguire il matching su **tutte le combinazioni** tra i CV in `data/sample_cvs` e le JD in `data/sample_jobs` e salvare i risultati in CSV:
+
+```powershell
+python run_batch_validation.py --out data/validation/batch_results.csv
+```
+
+Opzionale (negoziazione/refinement):
+
+```powershell
+python run_batch_validation.py --enable-refinement --refinement-threshold 50 --max-refinement-rounds 1
+```
 
 *Ultimo aggiornamento: Gennaio 2026*
