@@ -308,7 +308,7 @@ RULES:
 - Soft skills examples: communication, teamwork, leadership, problem solving, time management
 - Do NOT include years of experience or seniority phrases as skills (e.g., "3+ years of backend development experience")
 - If a requirement mixes years and a skill, extract ONLY the skill (e.g., "3+ years of Python" -> "Python")
-- SOFT SKILLS CLASSIFICATION: soft skills must be placed in "required_skills" ONLY if the job description explicitly marks them as required/mandatory/essential. If a soft skill is merely mentioned or listed without an explicit mandatory qualifier, place it in "preferred_skills"
+- SOFT SKILLS CLASSIFICATION: ALL soft skills (communication, teamwork, leadership, problem solving, etc.) must ALWAYS be placed in "preferred_skills", regardless of how the job description labels them. Even if marked as "required" or "essential", soft skills go into "preferred_skills"
 - For TECHNICAL skills only: if not explicitly marked as preferred/optional, consider them as required
 - "experience_years": integer, 0 if not specified
 - Extract SPECIFIC skills, avoid vague phrases (e.g., "strong background")

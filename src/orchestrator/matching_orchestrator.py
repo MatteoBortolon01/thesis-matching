@@ -128,7 +128,9 @@ class MatchingOrchestrator:
         self,
         cv_input: str,
         job_description: str,
-        enable_refinement: bool = True
+        enable_refinement: bool = True,
+        job_requirements: Optional["JobRequirements"] = None,
+        candidate_profile: Optional["CandidateProfile"] = None,
     ) -> OrchestratorResult:
         """
         Esegue il matching completo con eventuale negoziazione.
@@ -137,6 +139,8 @@ class MatchingOrchestrator:
             cv_input: Testo del CV o percorso PDF
             job_description: Testo della Job Description
             enable_refinement: Se True, attiva il refinement loop
+            job_requirements: Se fornito, salta l'estrazione JD (cache)
+            candidate_profile: Se fornito, salta l'estrazione CV (cache)
             
         Returns:
             OrchestratorResult con match e log negoziazione
@@ -150,16 +154,22 @@ class MatchingOrchestrator:
         # ═══════════════════════════════════════════════════════════════
         log_section(self._log, "PHASE 1: Initial Analysis", width=70, char="-")
         
-        # Job Agent analizza JD
-        self._log("Calling JobAgent...")
-        job_requirements = self.job_agent.analyze(job_description)
+        # Job Agent analizza JD (skip se già estratto)
+        if job_requirements is not None:
+            self._log("JobAgent: using cached extraction")
+        else:
+            self._log("Calling JobAgent...")
+            job_requirements = self.job_agent.analyze(job_description)
         self._log(f"   -> Job: {job_requirements.job_title}")
         self._log(f"   -> Required: {len(job_requirements.required_skills)} skills")
         self._log(f"   -> Preferred: {len(job_requirements.preferred_skills)} skills")
         
-        # Candidate Agent analizza CV
-        self._log("Calling CandidateAgent...")
-        candidate_profile = self.candidate_agent.analyze(cv_input)
+        # Candidate Agent analizza CV (skip se già estratto)
+        if candidate_profile is not None:
+            self._log("CandidateAgent: using cached extraction")
+        else:
+            self._log("Calling CandidateAgent...")
+            candidate_profile = self.candidate_agent.analyze(cv_input)
         self._log(f"   -> Candidate: {candidate_profile.name}")
         self._log(f"   -> Skills: {len(candidate_profile.skills)}")
         self._log(f"   -> Experience: {candidate_profile.experience_years} years")

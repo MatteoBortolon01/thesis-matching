@@ -154,6 +154,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         verbose=args.verbose,
     )
 
+    # ── Extraction caches ──
+    cv_cache: Dict[str, Any] = {}   # cv_path -> CandidateProfile
+    jd_cache: Dict[str, Any] = {}   # jd_path -> JobRequirements
+
     fieldnames = [
         "run_id",
         "timestamp_utc",
@@ -199,6 +203,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         "job_preferred_skills_json",
         "candidate_skills_json",
         "negotiation_log_json",
+        "cv_extraction_cached",
+        "jd_extraction_cached",
         "elapsed_ms",
         "error",
     ]
@@ -270,6 +276,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                     "job_preferred_skills_json": "",
                     "candidate_skills_json": "",
                     "negotiation_log_json": "",
+                    "cv_extraction_cached": False,
+                    "jd_extraction_cached": False,
                     "elapsed_ms": "",
                     "error": "",
                 }
@@ -278,15 +286,31 @@ def main(argv: Optional[List[str]] = None) -> int:
                     # Read text for non-PDF CVs (PDF handled by CandidateAgent)
                     cv_input = _read_text(cv_path) if cv_path.suffix.lower() != ".pdf" else str(cv_path)
 
+                    # Lookup cached extractions (deep-copy to isolate from refinement mutations)
+                    cached_cv = cv_cache.get(cv_name)
+                    cached_jd = jd_cache.get(jd_name)
+                    row["cv_extraction_cached"] = cached_cv is not None
+                    row["jd_extraction_cached"] = cached_jd is not None
+
                     result = orchestrator.run(
                         cv_input=cv_input,
                         job_description=jd_text,
                         enable_refinement=bool(args.enable_refinement),
+                        job_requirements=cached_jd.model_copy(deep=True) if cached_jd else None,
+                        candidate_profile=cached_cv.model_copy(deep=True) if cached_cv else None,
                     )
 
                     job = result.job_requirements
                     candidate = result.candidate_profile
                     match = result.match_result
+
+                    # Populate caches with ORIGINAL (pre-refinement) extraction
+                    # On first extraction result contains the original; for cached runs
+                    # the cache already holds it.
+                    if cv_name not in cv_cache:
+                        cv_cache[cv_name] = candidate.model_copy(deep=True)
+                    if jd_name not in jd_cache:
+                        jd_cache[jd_name] = job.model_copy(deep=True)
 
                     row["job_title"] = job.job_title or ""
                     row["candidate_name"] = candidate.name or ""
@@ -321,7 +345,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                     row["gaps_json"] = _json_dumps(match.gaps or [])
                     row["strengths_json"] = _json_dumps(match.strengths or [])
                     row["match_types_json"] = _json_dumps(mt)
-                    row["explanation"] = match.explanation or ""
+                    row["explanation"] = (match.explanation or "").replace("\r\n", " ").replace("\n", " ").replace("\r", " ").strip()
 
                     row["job_required_skills_json"] = _json_dumps(_safe_skill_list(job.required_skills))
                     row["job_preferred_skills_json"] = _json_dumps(_safe_skill_list(job.preferred_skills))
@@ -507,8 +531,17 @@ def _generate_validation_stats(csv_path: Path, stats_path: Path) -> None:
         _add("skills", "candidate_mean", f"{sum(n_candidate_list)/len(n_candidate_list):.2f}")
 
     # — Refinement —
-    _add("refinement", "pairs_improved", len(refined))
-    _add("refinement", "pairs_not_improved", len(ok_rows) - len(refined))
+    triggered = [r for r in ok_rows if _safe_int(r, "total_rounds") > 1]
+    not_triggered = [r for r in ok_rows if _safe_int(r, "total_rounds") <= 1]
+    triggered_improved = [r for r in triggered if _safe_float(r, "score_improvement") > 0]
+    triggered_not_improved = [r for r in triggered if _safe_float(r, "score_improvement") <= 0]
+
+    _add("refinement", "refinement_triggered", len(triggered))
+    _add("refinement", "refinement_not_triggered", len(not_triggered))
+    _add("refinement", "refinement_triggered_pct", f"{len(triggered) / len(ok_rows) * 100:.1f}" if ok_rows else "0")
+    _add("refinement", "triggered_and_improved", len(triggered_improved))
+    _add("refinement", "triggered_not_improved", len(triggered_not_improved))
+    _add("refinement", "improvement_rate_when_triggered", f"{len(triggered_improved) / len(triggered) * 100:.1f}" if triggered else "0")
     if non_zero_imp:
         _add("refinement", "avg_improvement", f"{sum(non_zero_imp)/len(non_zero_imp):.2f}")
         _add("refinement", "max_improvement", f"{max(non_zero_imp):.2f}")
@@ -569,7 +602,9 @@ def _generate_validation_stats(csv_path: Path, stats_path: Path) -> None:
         parts = [f"{k.replace('n_match_', '')}={v}" for k, v in match_type_totals.items() if v]
         print(f"  Match types ({total_matches_all} tot): {', '.join(parts)}")
     if non_zero_imp:
-        print(f"  Refinement: {len(refined)}/{len(ok_rows)} migliorati, avg +{sum(non_zero_imp)/len(non_zero_imp):.1f}")
+        print(f"  Refinement: attivato {len(triggered)}/{len(ok_rows)} ({len(triggered)/len(ok_rows)*100:.0f}%), "
+              f"migliorato {len(triggered_improved)}/{len(triggered)} ({len(triggered_improved)/len(triggered)*100:.0f}% quando attivo), "
+              f"avg +{sum(non_zero_imp)/len(non_zero_imp):.1f}")
     if elapsed_list:
         print(f"  Tempo: media={sum(elapsed_list)/len(elapsed_list):.0f}ms  tot={sum(elapsed_list)/1000:.1f}s")
     print(f"  Output CSV: {csv_path}")
