@@ -9,10 +9,6 @@ Sistema di matching CV-Job basato su architettura multi-agente con integrazione 
 2. [Architettura](#-architettura)
 3. [Stack Tecnologico](#-stack-tecnologico)
 4. [Struttura Progetto](#-struttura-progetto)
-5. [Setup](#-setup)
-6. [Flusso di Esecuzione](#-flusso-di-esecuzione)
-7. [Agenti](#-agenti)
-8. [ESCO Integration](#-esco-integration)
 
 ---
 
