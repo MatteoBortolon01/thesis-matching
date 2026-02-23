@@ -2,9 +2,6 @@
 
 Sistema di matching CV-Job basato su architettura multi-agente con integrazione ESCO.
 
-> **Tesi Universitaria** 
-
----
 
 ## Indice
 
